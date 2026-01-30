@@ -88,6 +88,14 @@ class DatabaseManager:
                             timestamp REAL
                         )''')
                 
+                # Quotas
+                c.execute('''CREATE TABLE IF NOT EXISTS quotas (
+                            mac TEXT PRIMARY KEY,
+                            quota_limit INTEGER DEFAULT 0,
+                            bytes_used INTEGER DEFAULT 0,
+                            last_reset REAL
+                        )''')
+                
                 # Indexes
                 c.execute("CREATE INDEX IF NOT EXISTS idx_history_mac ON browsing_history (mac)")
 
@@ -189,6 +197,20 @@ class DatabaseManager:
             row = c.fetchone()
             conn.close()
             return dict(row) if row else None
+
+    def get_all_quotas(self):
+        with self.lock:
+            conn = self.get_connection()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT mac, quota_limit, bytes_used FROM quotas")
+            rows = c.fetchall()
+            conn.close()
+            # Return dict: {mac: {'limit': x, 'used': y}}
+            result = {}
+            for r in rows:
+                result[r['mac']] = {'limit': r['quota_limit'], 'used': r['bytes_used']}
+            return result
             
     def set_quota(self, mac, limit_bytes):
         with self.lock:

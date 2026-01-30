@@ -28,6 +28,7 @@ db = None
 scheduler = None
 running = False
 limits_active = False
+device_quota_cache = {}
 
 def init_modules(iface, subnet, gw_ip):
     global scanner, monitor, spoofer, limiter, db, scheduler, running
@@ -142,6 +143,12 @@ def background_sync():
 
             except Exception as e:
                 Logger.error(f"Persistence Sync Error: {e}")
+            
+            # 5. Refresh Quota Cache
+            try:
+                device_quota_cache = db.get_all_quotas()
+            except: pass
+            
         time.sleep(5.0)
 
 def stop_modules():
@@ -328,6 +335,13 @@ def sse_events():
                     limit_up = int(l['up'] / 8 / 1024)
                     limit_down = int(l['down'] / 8 / 1024)
 
+                quota_limit = 0
+                quota_used = 0
+                if dev['mac'] in device_quota_cache:
+                    q = device_quota_cache[dev['mac']]
+                    quota_limit = q['limit']
+                    quota_used = q['used']
+
                 output_data.append({
                     "ip": ip,
                     "mac": dev['mac'],
@@ -342,7 +356,9 @@ def sse_events():
                     "total_down": total_down,
                     "last_seen": dev.get('last_seen', 0),
                     "limit_up": limit_up,
-                    "limit_down": limit_down
+                    "limit_down": limit_down,
+                    "quota_limit": quota_limit,
+                    "quota_used": quota_used
                 })
             
             json_data = json.dumps({
@@ -383,6 +399,13 @@ def get_data():
             limit_up = int(l['up'] / 8 / 1024)
             limit_down = int(l['down'] / 8 / 1024)
 
+        quota_limit = 0
+        quota_used = 0
+        if dev['mac'] in device_quota_cache:
+            q = device_quota_cache[dev['mac']]
+            quota_limit = q['limit']
+            quota_used = q['used']
+
         data.append({
             "ip": ip,
             "mac": dev['mac'],
@@ -397,7 +420,9 @@ def get_data():
             "total_down": sp.get('total_down', 0),
             "last_seen": dev.get('last_seen', 0),
             "limit_up": limit_up,
-            "limit_down": limit_down
+            "limit_down": limit_down,
+            "quota_limit": quota_limit,
+            "quota_used": quota_used
         })
         
     return jsonify({"devices": data, "monitor_lag": monitor_lag})
@@ -629,6 +654,13 @@ def start_server(iface, subnet, gw_ip, port=5000):
         
         # Ensure limiter starts if rules/captive loaded
         check_limiter_state()
+        
+        # Populate Quota Cache
+        global device_quota_cache
+        try:
+            device_quota_cache = db.get_all_quotas()
+            Logger.info(f"Loaded Quota Cache for {len(device_quota_cache)} devices")
+        except: pass
         
         # 3. Restore known devices for immediate targeting
         if scanner:

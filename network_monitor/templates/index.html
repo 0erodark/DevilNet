@@ -512,6 +512,9 @@
                             <th class="p-5 text-right cursor-pointer hover:text-accent transition"
                                 onclick="setSort('total')">Total <i class="ri-arrow-up-down-line ml-1 opacity-50"></i>
                             </th>
+                            <th class="p-5 text-left cursor-pointer hover:text-accent transition"
+                                onclick="setSort('quota')">Quota <i class="ri-arrow-up-down-line ml-1 opacity-50"></i>
+                            </th>
                             <th class="p-5 text-center">Controls</th>
                         </tr>
                     </thead>
@@ -830,11 +833,7 @@
                 return (valA < valB ? -1 : 1) * currentSort.dir;
             });
 
-            // Track IDs present in this update to potentially remove old ones (or keep them as user requested)
-            // User asked: "dont remove the devices which was recorded". 
-            // So if it's not in the new list, we just leave it alone? 
-            // But if we re-sort, we need to handle them.
-            // For now, let's strictly sync with backend but update gracefully.
+            // Track IDs present in this update to potentially remove old ones
             const currentIps = new Set(devicesData.map(d => d.ip));
 
             devicesData.forEach(d => {
@@ -843,14 +842,52 @@
 
                 const isLimited = (d.limit_up > 0 || d.limit_down > 0);
                 const isSelected = selectedIps.has(d.ip);
-                const rowClass = `group transition-colors ${isLimited ? 'bg-red-500/10 hover:bg-red-500/20' : 'hover:bg-white/[0.02]'} ${isSelected ? 'bg-accent/10' : ''}`;
+                const isOverQuota = d.quota_limit > 0 && (d.quota_used || 0) >= d.quota_limit;
+
+                let rowClass = `group transition-colors border-b border-white/5 `;
+                if (isOverQuota) {
+                    // Stronger visual for quota exceeded
+                    rowClass += 'bg-red-500/20 hover:bg-red-500/30 border-l-2 border-l-red-500 ';
+                } else if (isLimited) {
+                    rowClass += 'bg-red-500/5 hover:bg-red-500/10 '; // Lighter for limit
+                } else {
+                    rowClass += 'hover:bg-white/[0.02] ';
+                }
+
+                if (isSelected) rowClass += 'bg-accent/10 ';
 
                 const limitUpInfo = d.limit_up > 0 ? `<span class="text-red-400 text-[10px] ml-1 opacity-70">/${d.limit_up}KB</span>` : '';
                 const limitDownInfo = d.limit_down > 0 ? `<span class="text-red-400 text-[10px] ml-1 opacity-70">/${d.limit_down}KB</span>` : '';
 
                 const downHtml = `${d.down_speed > 0 ? '↓ ' + formatSpeed(d.down_speed) : '<span class="text-white/10">-</span>'} ${limitDownInfo}`;
                 const upHtml = `${d.up_speed > 0 ? '↑ ' + formatSpeed(d.up_speed) : '<span class="text-white/10">-</span>'} ${limitUpInfo}`;
-                const totalText = formatBytes(d.total_down + d.total_up);
+                let totalText = formatBytes(d.total_down + d.total_up);
+
+                // Quota display logic
+                let quotaBadge = ''; // Goes in Target column
+
+                if (d.quota_limit > 0) {
+                    const qUsed = d.quota_used || 0;
+                    const limitMB = Math.round(d.quota_limit / 1024 / 1024);
+                    const usedMB = (qUsed / 1024 / 1024).toFixed(1); // One decimal for precision
+
+                    const pct = Math.min(100, Math.round((qUsed / d.quota_limit) * 100));
+                    const color = pct >= 100 ? 'text-red-500' : (pct >= 90 ? 'text-orange-500' : 'text-accent');
+
+                    // Badge for Target Column
+                    if (isOverQuota) {
+                        quotaBadge = `<span class="inline-block mt-1 px-1.5 py-0.5 rounded bg-red-500/20 text-red-500 text-[10px] font-bold border border-red-500/30">QUOTA EXCEEDED</span>`;
+                    } else {
+                        quotaBadge = `<span class="inline-block mt-1 px-1.5 py-0.5 rounded bg-white/5 text-white/50 text-[10px] font-mono border border-white/10" title="Daily Quota">Limit: ${limitMB} MB</span>`;
+                    }
+
+                    // Total Column Details
+                    if (qUsed >= d.quota_limit) {
+                        totalText += `<div class="text-[10px] text-red-500 mt-1 font-bold"><i class="ri-error-warning-line"></i> ${usedMB} / ${limitMB} MB</div>`;
+                    } else {
+                        totalText += `<div class="text-[10px] ${color} mt-1 font-bold"><i class="ri-pie-chart-line"></i> ${usedMB} / ${limitMB} MB</div>`;
+                    }
+                }
 
                 const hostDisplay = d.hostname !== 'Unknown'
                     ? `<div class="font-bold text-white group-hover:text-accent transition">${d.hostname}</div>`
@@ -890,8 +927,9 @@
                              <input type="checkbox" onclick="toggleSelect('${d.ip}')" ${isSelected ? 'checked' : ''} class="rounded bg-white/10 border-white/20 text-accent focus:ring-0 cursor-pointer">
                         </td>
                         <td class="p-5">
-                            <div class="font-mono text-white/90">${d.ip}</div>
+                            <div class="font-mono text-white/90 font-bold">${d.ip}</div>
                             <div class="text-[10px] uppercase text-white/30 tracking-wider font-mono">${d.mac}</div>
+                            ${quotaBadge}
                         </td>
                         <td class="p-5">
                             <div class="flex items-center gap-2">
@@ -951,6 +989,15 @@
                     // Efficiently update only changed parts
                     if (tr.className !== rowClass) tr.className = rowClass;
 
+                    // Update Target Cell (IP + Badge)
+                    const targetCell = tr.children[1];
+                    const targetHtml = `
+                        <div class="font-mono text-white/90 font-bold">${d.ip}</div>
+                        <div class="text-[10px] uppercase text-white/30 tracking-wider font-mono">${d.mac}</div>
+                        ${quotaBadge}
+                    `;
+                    if (targetCell.innerHTML !== targetHtml) targetCell.innerHTML = targetHtml;
+
                     const downCell = tr.querySelector('.down-cell');
                     if (downCell.innerHTML !== downHtml) downCell.innerHTML = downHtml;
 
@@ -969,7 +1016,7 @@
                     osCell.innerHTML = newOsHtml;
 
                     const totalCell = tr.querySelector('.total-cell');
-                    if (totalCell.innerText !== totalText) totalCell.innerText = totalText;
+                    if (totalCell.innerHTML !== totalText) totalCell.innerHTML = totalText;
 
                     // Update Checkbox state if needed (mostly handled by toggle click but good to sync)
                     const chk = tr.querySelector('input[type="checkbox"]');
