@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Signal History // Evil Limits</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap"
+        rel="stylesheet">
+
+    <!-- Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+
+    <!-- Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        accent: 'var(--accent-color)',
+                        surface: 'var(--surface-color)',
+                        background: 'var(--bg-color)',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        :root {
+            --bg-color: #09090b;
+            --surface-color: rgba(24, 24, 27, 0.6);
+            --accent-color: #3b82f6;
+            --text-primary: #f8fafc;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image:
+                radial-gradient(at 0% 0%, rgba(var(--accent-color), 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(255, 255, 255, 0.05) 0px, transparent 50%);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .glass {
+            background: var(--surface-color);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+
+<body class="antialiased font-sans p-6 md:p-12">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+        
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+            <div>
+                <a href="/" class="text-white/40 hover:text-white transition text-xs font-mono mb-2 block">&larr; BACK TO DASHBOARD</a>
+                <h1 class="text-3xl font-bold tracking-tight">Signal History</h1>
+                <div class="flex items-center gap-3 mt-1 font-mono text-sm text-white/50">
+                    <span class="text-accent">{{ ip }}</span>
+                    <span>//</span>
+                    <span class="text-white/70">{{ hostname }}</span>
+                </div>
+            </div>
+            
+            <div class="glass px-4 py-2 rounded-lg border border-white/10 flex items-center gap-3">
+                <div class="text-right">
+                    <div class="text-xs text-white/40 uppercase tracking-wider">Total Detected</div>
+                    <div class="font-mono text-xl text-accent">{{ history|length }}</div>
+                </div>
+                <i class="ri-eye-2-line text-2xl text-white/20"></i>
+            </div>
+        </header>
+
+        <!-- Information Banner -->
+        <div class="bg-blue-500/10 border border-blue-500/20 p-4 rounded-xl flex gap-3 text-sm text-blue-200">
+            <i class="ri-radar-line mt-0.5"></i>
+            <div class="space-y-1">
+                <p class="font-bold">SNI Interception Log</p>
+                <p class="opacity-70">This log displays domains detected via Server Name Indication (SNI) header inspection. Full URL paths cannot be seen due to TLS encryption.</p>
+            </div>
+        </div>
+
+        <!-- Table -->
+        <div class="glass rounded-2xl overflow-hidden border border-white/10">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="text-xs font-bold text-white/40 uppercase tracking-wider border-b border-white/5 bg-white/5">
+                            <th class="p-5 w-48">Timestamp</th>
+                            <th class="p-5">Target Domain</th>
+                            <th class="p-5 w-24 text-right">Port</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-white/5 font-mono text-sm">
+                        {% for item in history %}
+                        <tr class="hover:bg-white/[0.02] transition-colors">
+                            <td class="p-5 text-white/50 whitespace-nowrap">
+                                <script>
+                                    document.write(new Date({{ item.time }} * 1000).toLocaleTimeString());
+                                </script>
+                            </td>
+                            <td class="p-5 text-accent">
+                                {{ item.domain }}
+                            </td>
+                            <td class="p-5 text-right text-white/30">
+                                443
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3" class="p-12 text-center text-white/20 italic">
+                                No traffic signals detected yet.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Auto Refresh Script -->
+    <script>
+        // Optional: We could implement auto-refresh here similar to the main dashboard
+        // reusing the same SSE endpoint but filtering on client side, or just reload.
+        // For a simple view, let's keep it static or rely on manual refresh.
+        // User asked for "other window", implying a static snapshot is also fine, 
+        // but let's add a small refresh button or just simple manual refresh support.
+        
+        // Let's just update timestamps to be human readable
+    </script>
+</body>
+</html>

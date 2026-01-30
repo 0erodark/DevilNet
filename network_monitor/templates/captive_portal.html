@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Access Verification</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            color: #333;
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            max-width: 400px;
+            width: 90%;
+        }
+
+        h1 {
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+            color: #1a73e8;
+        }
+
+        p {
+            margin-bottom: 1.5rem;
+            line-height: 1.5;
+            color: #555;
+        }
+
+        .btn {
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 24px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background-color: #1557b0;
+        }
+
+        .disclaimer {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Network Notification</h1>
+        <p>Your device access has been temporarily restricted by the network administrator.</p>
+        <p>Please acknowledge the terms to continue.</p>
+
+        <form id="ackForm" onsubmit="return acknowledge(event)">
+            <button type="submit" class="btn">I Understand</button>
+        </form>
+
+        <div class="disclaimer">
+            Access Control System &bull; Evil Limits
+        </div>
+    </div>
+
+    <script>
+        async function acknowledge(e) {
+            e.preventDefault();
+            try {
+                // We send request to the management server port (e.g. 4000)
+                // The browser location might be 'http://captive.portal/' mapped to our IP.
+                // We assume this page is served from the correct port or we need to know it.
+                // If this is served from :80, we need to hit :4000
+                const managePort = window.location.port || 80;
+
+                // If we are on port 80 (redirect proxy), we usually want to hit the API on 4000?
+                // But if we are serving this FROM 4000 (after redirect), then we are good.
+
+                const response = await fetch('/api/captive/acknowledge', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mac: 'auto' })
+                });
+
+                if (response.ok) {
+                    alert("Access Granted. You may need to reconnect Wi-Fi.");
+                    window.location.href = "http://google.com";
+                } else {
+                    alert("Error granting access.");
+                }
+            } catch (err) {
+                alert("Connection failed: " + err.message);
+            }
+            return false;
+        }
+    </script>
+</body>
+
+</html>

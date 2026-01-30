@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Evil Limits // Domain Rules</title>
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Outfit:wght@300;400;600;800&display=swap"
+        rel="stylesheet">
+    <!-- Icons -->
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+    <!-- Tailwind -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Outfit', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+                    colors: { accent: 'var(--accent-color)', surface: 'var(--surface-color)', background: 'var(--bg-color)' }
+                }
+            }
+        }
+    </script>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: rgba(30, 41, 59, 0.7);
+            --accent-color: #06b6d4;
+            --text-primary: #f8fafc;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: 'Outfit', sans-serif;
+            background-image: radial-gradient(at 0% 0%, rgba(var(--accent-color), 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(255, 255, 255, 0.05) 0px, transparent 50%);
+        }
+
+        .glass {
+            background: var(--surface-color);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+        }
+
+        .neo-input {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            transition: all 0.3s ease;
+        }
+
+        .neo-input:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        .neo-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.2s;
+        }
+
+        .neo-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            transform: translateY(-1px);
+        }
+    </style>
+</head>
+
+<body class="min-h-screen p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+        <!-- Header -->
+        <header class="glass rounded-2xl p-6 flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <a href="/"
+                    class="w-10 h-10 rounded-lg bg-white/5 flex items-center justify-center hover:bg-white/10 transition">
+                    <i class="ri-arrow-left-line text-xl"></i>
+                </a>
+                <div>
+                    <h1 class="text-xl font-bold tracking-tight">Domain Rules</h1>
+                    <p class="text-xs text-white/50">Manage redirects and blocks</p>
+                </div>
+            </div>
+            <div class="text-xs font-mono text-accent">Active Rules: <span id="rule-count">0</span></div>
+        </header>
+
+        <!-- New Rule Form -->
+        <div class="glass rounded-2xl p-6">
+            <h2 class="text-sm font-bold uppercase tracking-wider text-white/50 mb-4">Add New Limit</h2>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                <div class="space-y-1">
+                    <label class="text-xs text-white/40">Target Device</label>
+                    <select id="new-target" class="neo-input w-full p-3 rounded-lg text-sm bg-black/20 appearance-none">
+                        <option value="ALL">GLOBAL (All Devices)</option>
+                        <!-- Devices populated by JS -->
+                    </select>
+                </div>
+                <div class="space-y-1">
+                    <label class="text-xs text-white/40">Domain (Wildcard Supported)</label>
+                    <input type="text" id="new-domain" class="neo-input w-full p-3 rounded-lg font-mono text-sm"
+                        placeholder="*.youtube.com">
+                </div>
+                <div class="space-y-1">
+                    <label class="text-xs text-white/40">Action</label>
+                    <select id="new-action" class="neo-input w-full p-3 rounded-lg text-sm bg-black/20 appearance-none"
+                        onchange="toggleRedirectInput()">
+                        <option value="block">Block Page</option>
+                        <option value="redirect">Redirect</option>
+                    </select>
+                </div>
+                <div class="space-y-1" id="redirect-input-container" style="display:none;">
+                    <label class="text-xs text-white/40">Redirect URL</label>
+                    <input type="text" id="new-redirect" class="neo-input w-full p-3 rounded-lg font-mono text-sm"
+                        placeholder="http://google.com">
+                </div>
+                <div>
+                    <button onclick="addRule()"
+                        class="w-full bg-accent text-white font-bold py-3 rounded-lg shadow-lg hover:brightness-110 transition">
+                        ADD RULE
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Rules List -->
+        <div class="glass rounded-2xl overflow-hidden min-h-[300px]">
+            <table class="w-full text-left border-collapse">
+                <thead class="bg-white/5 border-b border-white/5 text-xs uppercase text-white/40 tracking-wider">
+                    <tr>
+                        <th class="p-4">Target</th>
+                        <th class="p-4">Pattern</th>
+                        <th class="p-4">Action</th>
+                        <th class="p-4 text-right">Controls</th>
+                    </tr>
+                </thead>
+                <tbody id="rules-list" class="divide-y divide-white/5 text-sm">
+                    <!-- Rules JS -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = '/api/rules/domain';
+        let devices = [];
+
+        async function init() {
+            await fetchDevices();
+            await fetchRules();
+        }
+
+        async function fetchDevices() {
+            try {
+                const res = await fetch('/api/data');
+                const data = await res.json();
+                devices = data.devices;
+                const select = document.getElementById('new-target');
+                devices.forEach(d => {
+                    const opt = document.createElement('option');
+                    opt.value = d.mac;
+                    opt.innerText = `${d.ip} (${d.hostname})`;
+                    select.appendChild(opt);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        async function fetchRules() {
+            try {
+                const res = await fetch(API_BASE);
+                const rules = await res.json();
+                renderRules(rules);
+            } catch (e) { console.error(e); }
+        }
+
+        function renderRules(rules) {
+            document.getElementById('rule-count').innerText = rules.length;
+            const tbody = document.getElementById('rules-list');
+            tbody.innerHTML = '';
+
+            if (rules.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="4" class="p-8 text-center text-white/30 italic">No active rules</td></tr>`;
+                return;
+            }
+
+            rules.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-white/5 transition group";
+
+                let targetDisplay = "GLOBAL";
+                if (r.target_mac !== 'ALL') {
+                    const dev = devices.find(d => d.mac === r.target_mac);
+                    targetDisplay = dev ? `${dev.ip} (${dev.hostname})` : r.target_mac;
+                }
+
+                let actionDisplay = `<span class="text-red-400 font-bold">BLOCK</span>`;
+                if (r.action === 'redirect') {
+                    actionDisplay = `<span class="text-blue-400 font-bold">REDIRECT</span> <span class="text-white/30 text-xs">→ ${r.redirect_target}</span>`;
+                }
+
+                tr.innerHTML = `
+                    <td class="p-4 font-mono text-white/80">${targetDisplay}</td>
+                    <td class="p-4 font-mono text-accent">${r.domain_pattern}</td>
+                    <td class="p-4">${actionDisplay}</td>
+                    <td class="p-4 text-right">
+                        <button onclick="deleteRule(${r.id})" class="p-2 text-white/20 hover:text-red-500 transition"><i class="ri-delete-bin-line"></i></button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function toggleRedirectInput() {
+            const action = document.getElementById('new-action').value;
+            const input = document.getElementById('redirect-input-container');
+            if (action === 'redirect') input.style.display = 'block';
+            else input.style.display = 'none';
+        }
+
+        async function addRule() {
+            const mac = document.getElementById('new-target').value;
+            const pattern = document.getElementById('new-domain').value.trim();
+            const action = document.getElementById('new-action').value;
+            let target = '';
+
+            if (!pattern) return alert("Domain pattern required");
+            if (action === 'redirect') {
+                target = document.getElementById('new-redirect').value.trim();
+                if (!target) return alert("Redirect URL/IP required");
+            }
+
+            try {
+                await fetch(API_BASE, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mac: mac,
+                        pattern: pattern,
+                        action: action,
+                        target: target
+                    })
+                });
+                document.getElementById('new-domain').value = '';
+                document.getElementById('new-redirect').value = '';
+                fetchRules();
+            } catch (e) { alert(e); }
+        }
+
+        async function deleteRule(id) {
+            if (!confirm("Remove this rule?")) return;
+            try {
+                await fetch(API_BASE + '/' + id, { method: 'DELETE' });
+                fetchRules();
+            } catch (e) { alert(e); }
+        }
+
+        init();
+    </script>
+</body>
+
+</html>
