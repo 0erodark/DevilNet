@@ -207,33 +207,22 @@
 
             <hr class="my-6 border-white/10">
 
-            <h3 class="text-lg font-bold tracking-tight mb-4">Data Quota (Coming Soon)</h3>
-            <div class="space-y-2 opacity-50 cursor-not-allowed">
-                <div class="flex items-center gap-2">
-                    <input type="checkbox" disabled class="rounded bg-white/10 border-white/20">
-                    <span class="text-sm text-white/70">Block after exceeding limit</span>
+            <h3 class="text-lg font-bold tracking-tight mb-4">Traffic Quota</h3>
+            <div class="space-y-4">
+                <div class="flex justify-between items-center text-sm">
+                    <span class="text-white/70 font-bold">Daily Data Cap</span>
+                    <span id="quota-status" class="font-mono text-accent">Unlimited</span>
                 </div>
                 <div class="relative">
-                    <input type="number" disabled class="neo-input w-full p-3 rounded-lg font-mono"
-                        placeholder="Daily Limit (MB)">
-                </div>
-                <p class="text-xs text-white/30">Quota management is currently backend-only. UI controls arriving in
-                    next update.</p>
-            </div>
-
-            <!-- 
-            <div class="space-y-4">
-                 <div class="flex justify-between items-center text-sm">
-                     <span class="text-white/70 font-bold">Daily Data Cap</span>
-                     <span id="quota-status" class="font-mono text-accent">Unlimited</span>
-                 </div>
-                 <div class="relative">
-                    <input type="number" id="quota-limit" class="neo-input w-full p-3 rounded-lg font-mono text-center" placeholder="0">
+                    <input type="number" id="quota-limit" class="neo-input w-full p-3 rounded-lg font-mono text-center"
+                        placeholder="0">
                     <span class="absolute right-3 top-3 text-xs text-white/30 font-mono">MB</span>
-                 </div>
-                 <button onclick="saveQuota()" class="w-full neo-btn py-2 text-sm text-white rounded-lg">SET QUOTA</button>
+                </div>
+                <button onclick="saveQuota()"
+                    class="w-full neo-btn py-2 text-sm text-white rounded-lg hover:bg-white/10 transition">SET
+                    QUOTA</button>
+                <p class="text-xs text-white/30 text-center">Set to 0 to disable quota.</p>
             </div>
-            -->
         </div>
     </div>
 
@@ -1130,6 +1119,9 @@
                 document.getElementById('limit-down').value = 0;
             }
 
+            // Load Quota
+            loadQuota(ip);
+
             const modal = document.getElementById('limit-modal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
@@ -1502,6 +1494,56 @@
         // Init
         updateRefreshRate(1000);
         update();
+
+        // --- Quota ---
+        function loadQuota(ip) {
+            fetch(`/api/quota/${ip}`)
+                .then(r => r.json())
+                .then(data => {
+                    const limitInput = document.getElementById('quota-limit');
+                    const statusEl = document.getElementById('quota-status');
+
+                    if (data.quota_limit > 0) {
+                        const limitMB = Math.round(data.quota_limit / 1024 / 1024);
+                        limitInput.value = limitMB;
+
+                        const usedMB = (data.bytes_used / 1024 / 1024).toFixed(1);
+                        const pct = Math.min(100, Math.round((data.bytes_used / data.quota_limit) * 100));
+
+                        statusEl.innerHTML = `<span class="${pct >= 100 ? 'text-red-500' : 'text-accent'}">${usedMB}MB / ${limitMB}MB (${pct}%)</span>`;
+                    } else {
+                        limitInput.value = '';
+                        statusEl.innerText = "Unlimited";
+                    }
+                })
+                .catch(err => {
+                    console.error("Error loading quota", err);
+                    document.getElementById('quota-status').innerText = "Error";
+                });
+        }
+
+        function saveQuota() {
+            if (!currentEditingIp) return;
+            const limit = document.getElementById('quota-limit').value;
+
+            // Find MAC
+            const dev = devicesData.find(d => d.ip === currentEditingIp);
+            if (!dev) return;
+
+            fetch('/api/quota', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mac: dev.mac, limit_mb: limit })
+            }).then(r => r.json()).then(res => {
+                if (res.status === 'ok') {
+                    // alert("Quota updated");
+                    closeModal();
+                    update();
+                } else {
+                    alert("Error updating quota");
+                }
+            });
+        }
 
         // --- Schedule ---
         function openScheduleModal() {

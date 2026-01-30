@@ -128,11 +128,13 @@ def background_sync():
                              if over_quota:
                                  if mac not in limiter.quota_blocked_macs:
                                      limiter.set_quota_block(mac, True)
+                                     check_limiter_state()
                                      Logger.warning(f"Device {ip} ({mac}) exceeded quota! Blocking enabled.")
                              else:
                                  # Unblock if under quota (e.g. limit increased)
                                  if mac in limiter.quota_blocked_macs:
                                      limiter.set_quota_block(mac, False)
+                                     check_limiter_state()
                                      Logger.info(f"Device {ip} ({mac}) quota restored.")
 
                     last_io_counters[ip]['up'] = t_up
@@ -190,8 +192,9 @@ def check_limiter_state():
     has_limits = len(limiter.limits) > 0
     has_rules = len(limiter.domain_rules) > 0
     has_captive = len(limiter.captive_portal_macs) > 0
+    has_quota = len(limiter.quota_blocked_macs) > 0
     
-    should_run = has_limits or has_rules or has_captive
+    should_run = has_limits or has_rules or has_captive or has_quota
     
     if should_run and not limits_active:
         Logger.info(f"Activating Traffic Limiter (Reason: Limits={has_limits}, Rules={has_rules}, Captive={has_captive})")
@@ -442,6 +445,10 @@ def rules_page():
 def blocked_page():
     return render_template('blocked.html')
 
+@app.route('/quota_exceeded')
+def quota_exceeded():
+    return render_template('quota_exceeded.html')
+
 @app.route('/api/rules/domain', methods=['GET', 'POST'])
 def domain_rules_api():
     if request.method == 'GET':
@@ -541,13 +548,16 @@ def start_redirect_server(target_port):
             
             # Check Limiter state for this IP/Domain
             if limiter:
-                # 1. Captive Portal check
-                # We check by MAC now
+                # 1. Captive Portal / Quota check
                 target_mac_addr = limiter.targets_mac.get(client_ip)
-                if target_mac_addr and target_mac_addr in limiter.captive_portal_macs:
-                     self.redirect_to(f"http://{host_domain}:{target_port}/captive_portal") # Keep Host for less confusion? Or redirect to known IP.
-                     # Actually, redirect to our Interface IP is safer.
-                     return
+                
+                if target_mac_addr:
+                    if target_mac_addr in limiter.captive_portal_macs:
+                         self.redirect_to(f"http://{limiter.my_ip}:{target_port}/captive_portal")
+                         return
+                    if target_mac_addr in limiter.quota_blocked_macs:
+                         self.redirect_to(f"http://{limiter.my_ip}:{target_port}/quota_exceeded")
+                         return
 
                 # 2. Domain Rule Check
                 # We need to match what the limiter matched.
@@ -608,6 +618,13 @@ def start_server(iface, subnet, gw_ip, port=5000):
             if d.get('is_captive') == 1 and d.get('mac'):
                 limiter.set_captive_portal(d['mac'], True)
                 count += 1
+            
+            # Restore Quota Blocks
+            q = db.get_quota_status(d['mac'])
+            if q and q['bytes_used'] > q['quota_limit'] and q['quota_limit'] > 0:
+                limiter.set_quota_block(d['mac'], True)
+                Logger.warning(f"Restored Quota Block for {d['mac']}")
+
         Logger.info(f"Restored Captive Portal for {count} devices")
         
         # Ensure limiter starts if rules/captive loaded
