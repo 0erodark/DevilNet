@@ -204,7 +204,96 @@
                     APPLY LIMITS
                 </button>
             </div>
-            <p class="mt-4 text-center text-xs text-white/30">Set to 0 for unlimited speed.</p>
+
+            <hr class="my-6 border-white/10">
+
+            <h3 class="text-lg font-bold tracking-tight mb-4">Data Quota (Coming Soon)</h3>
+            <div class="space-y-2 opacity-50 cursor-not-allowed">
+                <div class="flex items-center gap-2">
+                    <input type="checkbox" disabled class="rounded bg-white/10 border-white/20">
+                    <span class="text-sm text-white/70">Block after exceeding limit</span>
+                </div>
+                <div class="relative">
+                    <input type="number" disabled class="neo-input w-full p-3 rounded-lg font-mono"
+                        placeholder="Daily Limit (MB)">
+                </div>
+                <p class="text-xs text-white/30">Quota management is currently backend-only. UI controls arriving in
+                    next update.</p>
+            </div>
+
+            <!-- 
+            <div class="space-y-4">
+                 <div class="flex justify-between items-center text-sm">
+                     <span class="text-white/70 font-bold">Daily Data Cap</span>
+                     <span id="quota-status" class="font-mono text-accent">Unlimited</span>
+                 </div>
+                 <div class="relative">
+                    <input type="number" id="quota-limit" class="neo-input w-full p-3 rounded-lg font-mono text-center" placeholder="0">
+                    <span class="absolute right-3 top-3 text-xs text-white/30 font-mono">MB</span>
+                 </div>
+                 <button onclick="saveQuota()" class="w-full neo-btn py-2 text-sm text-white rounded-lg">SET QUOTA</button>
+            </div>
+            -->
+        </div>
+    </div>
+
+    <!-- Modal: Schedule -->
+    <div id="schedule-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm transition-opacity" onclick="closeScheduleModal()">
+        </div>
+        <div
+            class="relative glass rounded-2xl w-full max-w-lg p-8 shadow-2xl transform transition-all scale-100 opacity-100">
+            <div class="flex items-center justify-between mb-6">
+                <h3 class="text-2xl font-bold tracking-tight">Time Rules</h3>
+                <button onclick="closeScheduleModal()" class="text-white/50 hover:text-white transition"><i
+                        class="ri-close-line text-2xl"></i></button>
+            </div>
+
+            <div class="mb-6 space-y-4">
+                <div class="p-4 rounded-lg bg-white/5 border border-white/10 h-64 overflow-y-auto custom-scrollbar"
+                    id="schedule-list">
+                    <!-- Rules loaded here -->
+                    <div class="text-center text-white/30 italic mt-10">No active rules</div>
+                </div>
+            </div>
+
+            <div class="border-t border-white/10 pt-6">
+                <h4 class="font-bold text-sm text-white/70 mb-4 uppercase">Add New Rule</h4>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="text-xs text-white/50 block mb-1">Start Time</label>
+                        <input type="time" id="rule-start" class="neo-input w-full p-2 rounded">
+                    </div>
+                    <div>
+                        <label class="text-xs text-white/50 block mb-1">End Time</label>
+                        <input type="time" id="rule-end" class="neo-input w-full p-2 rounded">
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <label class="text-xs text-white/50 block mb-1">Target</label>
+                    <select id="rule-target" class="neo-input w-full p-2 rounded bg-black">
+                        <option value="ALL">All Devices</option>
+                        <!-- JS will populate specific devices -->
+                    </select>
+                </div>
+                <div class="mb-4">
+                    <label class="text-xs text-white/50 block mb-1">Days</label>
+                    <div class="flex justify-between text-xs font-mono">
+                        <label><input type="checkbox" class="days-cb" value="0"> M</label>
+                        <label><input type="checkbox" class="days-cb" value="1"> T</label>
+                        <label><input type="checkbox" class="days-cb" value="2"> W</label>
+                        <label><input type="checkbox" class="days-cb" value="3"> T</label>
+                        <label><input type="checkbox" class="days-cb" value="4"> F</label>
+                        <label><input type="checkbox" class="days-cb" value="5"> S</label>
+                        <label><input type="checkbox" class="days-cb" value="6"> S</label>
+                    </div>
+                </div>
+
+                <button onclick="addScheduleRule()"
+                    class="w-full bg-accent text-white font-bold py-3 rounded-lg shadow-lg hover:-translate-y-0.5 transition-all">
+                    ADD RULE
+                </button>
+            </div>
         </div>
     </div>
 
@@ -348,6 +437,12 @@
                 </div>
 
                 <!-- Stats Widget -->
+                <div class="glass px-5 py-2 rounded-xl border-accent/20 text-center cursor-pointer hover:bg-white/5 transition"
+                    onclick="openScheduleModal()">
+                    <div class="text-2xl font-bold font-mono text-accent"><i class="ri-calendar-event-line"></i></div>
+                    <div class="text-[10px] uppercase font-bold tracking-wider text-white/40">Schedule</div>
+                </div>
+
                 <div class="glass px-5 py-2 rounded-xl border-accent/20 text-center">
                     <div class="text-2xl font-bold font-mono text-accent" id="device-count">0</div>
                     <div class="text-[10px] uppercase font-bold tracking-wider text-white/40">Targets</div>
@@ -1407,6 +1502,107 @@
         // Init
         updateRefreshRate(1000);
         update();
+
+        // --- Schedule ---
+        function openScheduleModal() {
+            document.getElementById('schedule-modal').classList.remove('hidden');
+            document.getElementById('schedule-modal').classList.add('flex');
+
+            // Populate Target Dropdown
+            const select = document.getElementById('rule-target');
+            // Keep "All Devices"
+            select.innerHTML = '<option value="ALL">All Devices</option>';
+
+            // Add known devices
+            devicesData.forEach(d => {
+                const name = d.hostname !== 'Unknown' ? d.hostname : d.ip;
+                const opt = document.createElement('option');
+                opt.value = d.mac;
+                opt.innerText = `${name} (${d.ip})`;
+                select.appendChild(opt);
+            });
+
+            loadScheduleRules();
+        }
+
+        function closeScheduleModal() {
+            document.getElementById('schedule-modal').classList.add('hidden');
+            document.getElementById('schedule-modal').classList.remove('flex');
+        }
+
+        function loadScheduleRules() {
+            fetch('/api/schedule')
+                .then(r => r.json())
+                .then(rules => {
+                    const list = document.getElementById('schedule-list');
+                    list.innerHTML = '';
+                    if (!rules || rules.length === 0) {
+                        list.innerHTML = '<div class="text-center text-white/30 italic mt-10">No active rules</div>';
+                        return;
+                    }
+
+                    rules.forEach(rule => {
+                        const div = document.createElement('div');
+                        div.className = "bg-black/20 p-3 rounded mb-2 flex justify-between items-center animate-enter";
+
+                        // Parse days
+                        const daysMap = ['M', 'T', 'W', 'T', 'F', 'S', 'S']; // 0=Mon
+                        const daysStr = rule.days.split(',').map(d => daysMap[parseInt(d)]).join(' ');
+
+                        div.innerHTML = `
+                            <div>
+                                <div class="font-bold text-sm text-white">${rule.start_time} - ${rule.end_time}</div>
+                                <div class="text-xs text-white/50">${daysStr} • ${rule.target_mac === 'ALL' ? 'All Devices' : 'Specific Device'}</div>
+                            </div>
+                            <button onclick="deleteScheduleRule(${rule.id})" class="text-red-500 hover:text-red-400"><i class="ri-delete-bin-line"></i></button>
+                        `;
+                        list.appendChild(div);
+                    });
+                });
+        }
+
+        function addScheduleRule() {
+            const start = document.getElementById('rule-start').value;
+            const end = document.getElementById('rule-end').value;
+            const target = document.getElementById('rule-target').value;
+
+            // Get checked days
+            const days = Array.from(document.querySelectorAll('.days-cb:checked')).map(cb => cb.value).join(',');
+
+            if (!start || !end || !days) {
+                alert("Please fill all fields");
+                return;
+            }
+
+            fetch('/api/schedule', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: "Rule " + Date.now(), // Auto name for now
+                    mac: target,
+                    action: 'block', // Default to block
+                    start: start,
+                    end: end,
+                    days: days
+                })
+            }).then(r => r.json()).then(res => {
+                if (res.status === 'ok') {
+                    loadScheduleRules();
+                    // Clear inputs?
+                } else {
+                    alert("Error adding rule");
+                }
+            });
+        }
+
+        function deleteScheduleRule(id) {
+            if (!confirm("Delete this rule?")) return;
+            fetch(`/api/schedule/${id}`, { method: 'DELETE' })
+                .then(r => r.json())
+                .then(res => {
+                    loadScheduleRules();
+                });
+        }
 
         // --- Captive Portal Logic ---
         async function toggleCaptivePortal(ip) {

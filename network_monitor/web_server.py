@@ -11,6 +11,7 @@ from network_monitor.spoofer import ARPSpoofer
 from network_monitor.limiter import PacketLimiter
 from network_monitor.database import DatabaseManager
 from network_monitor.scheduler import Scheduler
+from network_monitor.logger import Logger
 
 # Disable flask banner
 log = logging.getLogger('werkzeug')
@@ -29,7 +30,7 @@ running = False
 limits_active = False
 
 def init_modules(iface, subnet, gw_ip):
-    global scanner, monitor, spoofer, limiter, running
+    global scanner, monitor, spoofer, limiter, db, scheduler, running
     scanner = DeviceScanner(iface, subnet)
     monitor = BandwidthMonitor(iface)
     spoofer = ARPSpoofer(iface, gw_ip)
@@ -47,7 +48,7 @@ def init_modules(iface, subnet, gw_ip):
     db = DatabaseManager()
     
     def rule_callback(mac, action, enable):
-        print(f"[Scheduler] Rule triggered: {mac} {action} {enable}")
+        Logger.info(f"[Scheduler] Rule triggered: {mac} {action} {enable}")
         # TODO: Apply action
         pass
 
@@ -59,6 +60,87 @@ def init_modules(iface, subnet, gw_ip):
     monitor.start()
     spoofer.start()
     scheduler.start()
+    
+    # Start background sync
+    t_sync = threading.Thread(target=background_sync, daemon=True)
+    t_sync.start()
+
+def background_sync():
+    """Periodically syncs discovered devices, history, apps, and usage to DB and modules."""
+    Logger.info("Background Persistence Loop Started")
+    last_io_counters = {} # {ip: {'up': 0, 'down': 0}}
+    
+    while running:
+        if scanner and spoofer and limiter and db and monitor:
+            try:
+                # 1. Sync Scanned Devices -> DB & Spoofer/Limiter
+                devices = scanner.get_devices()
+                spoofer.set_targets(devices)
+                limiter.update_targets(devices)
+                
+                # Persist Devices
+                for d in devices:
+                    db.update_device(d['mac'], d['ip'], d.get('hostname'), d.get('vendor'))
+                
+                # 2. Sync History -> DB
+                history_data = monitor.get_and_clear_history() # {ip: [(domain, ts)]}
+                for ip, domains in history_data.items():
+                    dev = next((d for d in devices if d['ip'] == ip), None)
+                    if dev:
+                        for entry in domains:
+                            db.log_browsing_history(dev['mac'], entry[0], entry[1])
+
+                # 3. Sync Apps -> DB
+                apps_data = monitor.get_and_clear_apps() # {ip: {app_names}}
+                for ip, app_set in apps_data.items():
+                    dev = next((d for d in devices if d['ip'] == ip), None)
+                    if dev:
+                        for app in app_set:
+                            db.update_app_usage(dev['mac'], app, 0, 0) # Bytes not tracked yet
+
+                # 4. Sync Bandwidth -> DB (Quotas)
+                speeds, _ = monitor.get_speeds()
+                for ip, stats in speeds.items():
+                    dev = next((d for d in devices if d['ip'] == ip), None)
+                    if not dev: continue
+                    
+                    mac = dev['mac']
+                    t_up = stats.get('total_up', 0)
+                    t_down = stats.get('total_down', 0)
+                    
+                    if ip not in last_io_counters:
+                        last_io_counters[ip] = {'up': t_up, 'down': t_down}
+                        continue
+                        
+                    delta_up = t_up - last_io_counters[ip]['up']
+                    delta_down = t_down - last_io_counters[ip]['down']
+                    
+                    # Handle resets
+                    if delta_up < 0 or delta_down < 0:
+                        last_io_counters[ip] = {'up': t_up, 'down': t_down}
+                        continue
+
+                    total_delta = delta_up + delta_down
+                    if total_delta > 0:
+                         over_quota = db.update_quota_usage(mac, total_delta)
+                         
+                         if limiter:
+                             if over_quota:
+                                 if mac not in limiter.quota_blocked_macs:
+                                     limiter.set_quota_block(mac, True)
+                                     Logger.warning(f"Device {ip} ({mac}) exceeded quota! Blocking enabled.")
+                             else:
+                                 # Unblock if under quota (e.g. limit increased)
+                                 if mac in limiter.quota_blocked_macs:
+                                     limiter.set_quota_block(mac, False)
+                                     Logger.info(f"Device {ip} ({mac}) quota restored.")
+
+                    last_io_counters[ip]['up'] = t_up
+                    last_io_counters[ip]['down'] = t_down
+
+            except Exception as e:
+                Logger.error(f"Persistence Sync Error: {e}")
+        time.sleep(5.0)
 
 def stop_modules():
     global running
@@ -93,13 +175,34 @@ def captive_ack():
                      break
     
     if mac and limiter:
-        print(f"[*] Access Granted (Captive) for {ip} ({mac})")
+        Logger.info(f"Access Granted (Captive) for {ip} ({mac})")
         limiter.set_captive_portal(mac, False)
         # Also ensure they aren't blocked by scheduler if that was the cause?
         # For now, just disable the captive flag.
         return jsonify({"status": "granted"})
         
     return jsonify({"error": "Unknown device"}), 400
+
+def check_limiter_state():
+    global limits_active
+    if not limiter or not spoofer: return
+
+    has_limits = len(limiter.limits) > 0
+    has_rules = len(limiter.domain_rules) > 0
+    has_captive = len(limiter.captive_portal_macs) > 0
+    
+    should_run = has_limits or has_rules or has_captive
+    
+    if should_run and not limits_active:
+        Logger.info(f"Activating Traffic Limiter (Reason: Limits={has_limits}, Rules={has_rules}, Captive={has_captive})")
+        spoofer._disable_ip_forwarding()
+        limiter.start()
+        limits_active = True
+    elif not should_run and limits_active:
+        Logger.info("Deactivating Traffic Limiter (Enabling OS Forwarding)")
+        limiter.stop()
+        spoofer._enable_ip_forwarding()
+        limits_active = False
 
 @app.route('/api/limit', methods=['POST'])
 def update_limit():
@@ -113,19 +216,7 @@ def update_limit():
         return jsonify({"error": "Limiter not initialized"}), 500
         
     limiter.set_limit(ip, up, down)
-    
-    has_limits = len(limiter.limits) > 0
-    
-    if has_limits and not limits_active:
-        print("[*] Activating Traffic Limiter (Disabling OS Forwarding)")
-        spoofer._disable_ip_forwarding()
-        limiter.start()
-        limits_active = True
-    elif not has_limits and limits_active:
-        print("[*] Deactivating Traffic Limiter (Enabling OS Forwarding)")
-        limiter.stop()
-        spoofer._enable_ip_forwarding()
-        limits_active = False
+    check_limiter_state()
         
     return jsonify({"status": "ok", "active": limits_active})
 
@@ -135,6 +226,7 @@ def update_dns_blacklist():
     domains = data.get('domains', [])
     if limiter:
         limiter.set_dns_blacklist(domains)
+        check_limiter_state()
         return jsonify({"status": "ok", "count": len(domains)})
     return jsonify({"error": "Limiter not running"}), 500
 
@@ -160,6 +252,7 @@ def update_captive_portal():
              limiter.set_captive_portal(found_mac, enable)
              if db:
                  db.set_captive_status(found_mac, enable)
+             check_limiter_state()
              
         return jsonify({"status": "ok", "ip": ip, "captive": enable})
     return jsonify({"error": "Limiter not running"}), 500
@@ -363,6 +456,7 @@ def domain_rules_api():
         # Update Limiter (Reload all rules)
         rules = db.get_domain_rules()
         if limiter: limiter.update_domain_rules(rules)
+        check_limiter_state()
         return jsonify({"status": "ok"})
     return jsonify({"error": "DB not ready"}), 500
 
@@ -372,6 +466,55 @@ def delete_domain_rule(rule_id):
         db.remove_domain_rule(rule_id)
         rules = db.get_domain_rules()
         if limiter: limiter.update_domain_rules(rules)
+        check_limiter_state()
+        return jsonify({"status": "ok"})
+    return jsonify({"error": "DB not ready"}), 500
+
+@app.route('/api/quota', methods=['POST'])
+def update_quota():
+    data = request.json
+    mac = data.get('mac')
+    limit_mb = int(data.get('limit_mb', 0))
+    limit_bytes = limit_mb * 1024 * 1024
+    if db and mac:
+        db.set_quota(mac, limit_bytes)
+        return jsonify({"status": "ok", "limit_mb": limit_mb})
+    return jsonify({"error": "DB not ready or missing MAC"}), 400
+
+@app.route('/api/quota/<ip>')
+def get_quota(ip):
+    # Resolve MAC
+    if scanner:
+         with scanner.lock:
+             dev = next((d for d in scanner.devices.values() if d['ip'] == ip), None)
+             if dev and db:
+                 status = db.get_quota_status(dev['mac'])
+                 if status:
+                     return jsonify(dict(status))
+                 else:
+                     return jsonify({"quota_limit": 0, "bytes_used": 0})
+    return jsonify({"error": "Device not found"}), 404
+
+@app.route('/api/schedule', methods=['GET', 'POST'])
+def schedule_api():
+    if request.method == 'GET':
+        if db: return jsonify(db.get_active_rules())
+        return jsonify([])
+    
+    # POST
+    data = request.json
+    if db:
+        # name, target_mac, action, start, end, days
+        db.add_rule(data['name'], data['mac'], data['action'], data['start'], data['end'], data['days'])
+        if scheduler: scheduler.load_rules()
+        return jsonify({"status": "ok"})
+    return jsonify({"error": "DB not ready"}), 500
+
+@app.route('/api/schedule/<int:rule_id>', methods=['DELETE'])
+def delete_schedule_rule(rule_id):
+    if db:
+        db.delete_rule(rule_id)
+        if scheduler: scheduler.load_rules()
         return jsonify({"status": "ok"})
     return jsonify({"error": "DB not ready"}), 500
 
@@ -443,10 +586,10 @@ def start_redirect_server(target_port):
     try:
         # Allow binding to port 80 (requires root)
         server = HTTPServer(('0.0.0.0', 80), RedirectHandler)
-        print("[*] Port 80 Redirect Server Started")
+        Logger.info("Port 80 Redirect Server Started")
         server.serve_forever()
     except Exception as e:
-        print(f"[-] Could not start Redirect Server on port 80: {e}")
+        Logger.error(f"Could not start Redirect Server on port 80: {e}")
 
 def start_server(iface, subnet, gw_ip, port=5000):
     init_modules(iface, subnet, gw_ip)
@@ -455,8 +598,8 @@ def start_server(iface, subnet, gw_ip, port=5000):
     if db and limiter:
         # 1. Domain Rules
         rules = db.get_domain_rules()
-        limiter.update_domain_rules(rules)
-        print(f"[*] Loaded {len(rules)} domain rules")
+        if limiter: limiter.update_domain_rules(rules)
+        Logger.info(f"Loaded {len(rules)} domain rules")
         
         # 2. Captive Portal State (Persistence)
         devices = db.get_all_devices()
@@ -465,8 +608,19 @@ def start_server(iface, subnet, gw_ip, port=5000):
             if d.get('is_captive') == 1 and d.get('mac'):
                 limiter.set_captive_portal(d['mac'], True)
                 count += 1
-        print(f"[*] Restored Captive Portal for {count} devices")
-    
+        Logger.info(f"Restored Captive Portal for {count} devices")
+        
+        # Ensure limiter starts if rules/captive loaded
+        check_limiter_state()
+        
+        # 3. Restore known devices for immediate targeting
+        if scanner:
+            scanner.restore_devices(devices)
+            restored = scanner.get_devices()
+            Logger.info(f"Restored {len(devices)} known devices to Scanner")
+            if spoofer: spoofer.set_targets(restored)
+            if limiter: limiter.update_targets(restored)
+
     from werkzeug.serving import make_server
     # IMPORTANT: threaded=True is required for SSE to work without blocking other requests
     server = make_server('0.0.0.0', port, app, threaded=True)
@@ -479,7 +633,7 @@ def start_server(iface, subnet, gw_ip, port=5000):
     
     signal.signal(signal.SIGINT, signal_handler)
     
-    print(f" * Web UI running at http://0.0.0.0:{port}")
+    Logger.success(f"Web UI running at http://0.0.0.0:{port}")
     
     # Start Redirect Server in background
     t_redirect = threading.Thread(target=start_redirect_server, args=(port,), daemon=True)

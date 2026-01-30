@@ -25,6 +25,26 @@ class DeviceScanner:
         except Exception:
             self.mac_lookup = None
 
+    def restore_devices(self, db_devices: List[Dict]):
+        """Populate initial device list from database to speed up targeting on restart."""
+        with self.lock:
+            for d in db_devices:
+                mac = d.get('mac')
+                ip = d.get('ip')
+                if mac and ip:
+                     # Calculate last seen based on DB?
+                     # If old, maybe don't trust the IP, but good for initial target list.
+                     # Spoofer will fail gracefully if IP is gone.
+                     self.devices[mac] = {
+                         "ip": ip,
+                         "mac": mac,
+                         "vendor": d.get("vendor", "Unknown"),
+                         "hostname": d.get("hostname", "Unknown"),
+                         "possible_names": [],
+                         "manual_hostname": True if d.get("hostname") else False,
+                         "last_seen": d.get("last_seen", time.time())
+                     }
+
     def start(self):
         self.running = True
         self.thread = threading.Thread(target=self._scan_loop, daemon=True)

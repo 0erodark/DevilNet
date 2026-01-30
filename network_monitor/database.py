@@ -3,6 +3,7 @@ import threading
 import time
 import os
 import json
+from network_monitor.logger import Logger
 
 class DatabaseManager:
     def __init__(self, db_path="network_data.db"):
@@ -11,75 +12,108 @@ class DatabaseManager:
         self._init_db()
 
     def _init_db(self):
-        with self.lock:
-            conn = sqlite3.connect(self.db_path)
-            c = conn.cursor()
-            
-            # Devices table (persistent tracking)
-            c.execute('''CREATE TABLE IF NOT EXISTS devices (
-                        mac TEXT PRIMARY KEY,
-                        ip TEXT,
-                        hostname TEXT,
-                        first_seen REAL,
-                        last_seen REAL,
-                        vendor TEXT,
-                        alias TEXT,
-                        profile TEXT DEFAULT 'default',
-                        is_captive INTEGER DEFAULT 0
-                    )''')
+        try:
+            with self.lock:
+                conn = sqlite3.connect(self.db_path)
+                c = conn.cursor()
+                
+                # Devices table (persistent tracking)
+                c.execute('''CREATE TABLE IF NOT EXISTS devices (
+                            mac TEXT PRIMARY KEY,
+                            ip TEXT,
+                            hostname TEXT,
+                            first_seen REAL,
+                            last_seen REAL,
+                            vendor TEXT,
+                            alias TEXT,
+                            profile TEXT DEFAULT 'default',
+                            is_captive INTEGER DEFAULT 0
+                        )''')
 
-            # Quotas table
-            c.execute('''CREATE TABLE IF NOT EXISTS quotas (
-                        mac TEXT PRIMARY KEY,
-                        bytes_used INTEGER DEFAULT 0,
-                        quota_limit INTEGER DEFAULT 0, /* 0 = unlimited */
-                        reset_period TEXT DEFAULT 'daily', /* daily, weekly, monthly */
-                        last_reset REAL
-                    )''')
+                # Quotas table
+                c.execute('''CREATE TABLE IF NOT EXISTS quotas (
+                            mac TEXT PRIMARY KEY,
+                            bytes_used INTEGER DEFAULT 0,
+                            quota_limit INTEGER DEFAULT 0, /* 0 = unlimited */
+                            reset_period TEXT DEFAULT 'daily', /* daily, weekly, monthly */
+                            last_reset REAL
+                        )''')
 
-            # Traffic Rules (Time-based events)
-            c.execute('''CREATE TABLE IF NOT EXISTS rules (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT,
-                        target_mac TEXT, /* 'ALL' or specific MAC */
-                        action TEXT, /* 'block', 'throttle', 'redirect' */
-                        start_time TEXT, /* HH:MM */
-                        end_time TEXT, /* HH:MM */
-                        days TEXT, /* 0,1,2,3,4,5,6 (Monday-Sunday) */
-                        enabled INTEGER DEFAULT 1
-                    )''')
+                # Traffic Rules (Time-based events)
+                c.execute('''CREATE TABLE IF NOT EXISTS rules (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            name TEXT,
+                            target_mac TEXT, /* 'ALL' or specific MAC */
+                            action TEXT, /* 'block', 'throttle', 'redirect' */
+                            start_time TEXT, /* HH:MM */
+                            end_time TEXT, /* HH:MM */
+                            days TEXT, /* 0,1,2,3,4,5,6 (Monday-Sunday) */
+                            enabled INTEGER DEFAULT 1
+                        )''')
 
-            # DHCP Starvation Events / Security logs
-            c.execute('''CREATE TABLE IF NOT EXISTS security_logs (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp REAL,
-                        event_type TEXT,
-                        details TEXT,
-                        severity TEXT
-                    )''')
-            
-            # Application/DPI Logs (Aggregated per device)
-            c.execute('''CREATE TABLE IF NOT EXISTS app_usage (
-                         mac TEXT,
-                         app_name TEXT,
-                         bytes_down INTEGER DEFAULT 0,
-                         bytes_up INTEGER DEFAULT 0,
-                         last_updated REAL,
-                         PRIMARY KEY (mac, app_name)
-                    )''')
+                # DHCP Starvation Events / Security logs
+                c.execute('''CREATE TABLE IF NOT EXISTS security_logs (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            timestamp REAL,
+                            event_type TEXT,
+                            details TEXT,
+                            severity TEXT
+                        )''')
+                
+                # Application/DPI Logs (Aggregated per device)
+                c.execute('''CREATE TABLE IF NOT EXISTS app_usage (
+                             mac TEXT,
+                             app_name TEXT,
+                             bytes_down INTEGER DEFAULT 0,
+                             bytes_up INTEGER DEFAULT 0,
+                             last_updated REAL,
+                             PRIMARY KEY (mac, app_name)
+                        )''')
 
-            # Domain Redirection/Blocking Rules
-            c.execute('''CREATE TABLE IF NOT EXISTS domain_rules (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        target_mac TEXT, /* 'ALL' or specific MAC */
-                        domain_pattern TEXT, /* Wildcard support */
-                        action TEXT, /* 'block' or 'redirect' */
-                        redirect_target TEXT, /* URL or IP */
-                        created_at REAL
-                    )''')
+                # Domain Redirection/Blocking Rules
+                c.execute('''CREATE TABLE IF NOT EXISTS domain_rules (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            target_mac TEXT, /* 'ALL' or specific MAC */
+                            domain_pattern TEXT, /* Wildcard support */
+                            action TEXT, /* 'block' or 'redirect' */
+                            redirect_target TEXT, /* URL or IP */
+                            created_at REAL
+                        )''')
+                        
+                # Browsing History (Persistent)
+                c.execute('''CREATE TABLE IF NOT EXISTS browsing_history (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            mac TEXT,
+                            domain TEXT,
+                            timestamp REAL
+                        )''')
+                
+                # Indexes
+                c.execute("CREATE INDEX IF NOT EXISTS idx_history_mac ON browsing_history (mac)")
 
-            conn.commit()
-            conn.close()
+                # --- MIGRATIONS ---
+                # Robust column addition using try/except
+                try:
+                    c.execute("ALTER TABLE devices ADD COLUMN is_captive INTEGER DEFAULT 0")
+                    Logger.info("Migrated: Added 'is_captive' to devices")
+                except sqlite3.OperationalError: pass # Exists
+                
+                try:
+                    c.execute("ALTER TABLE devices ADD COLUMN profile TEXT DEFAULT 'default'")
+                    Logger.info("Migrated: Added 'profile' to devices")
+                except sqlite3.OperationalError: pass
+                
+                try:
+                    c.execute("ALTER TABLE devices ADD COLUMN alias TEXT")
+                    Logger.info("Migrated: Added 'alias' to devices")
+                except sqlite3.OperationalError: pass
+
+                conn.commit()
+                conn.close()
+                Logger.info(f"Database initialized at {self.db_path}")
+
+        except Exception as e:
+            Logger.error(f"Database Initialization Failed: {e}")
 
     def get_connection(self):
         return sqlite3.connect(self.db_path)
@@ -175,6 +209,14 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
+    def delete_rule(self, rule_id):
+        with self.lock:
+            conn = self.get_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM rules WHERE id=?", (rule_id,))
+            conn.commit()
+            conn.close()
+
     def get_active_rules(self):
         with self.lock:
             conn = self.get_connection()
@@ -247,3 +289,23 @@ class DatabaseManager:
             conn.commit()
             conn.close()
 
+    
+    # --- Browsing History ---
+    def log_browsing_history(self, mac, domain, timestamp):
+        with self.lock:
+            conn = self.get_connection()
+            c = conn.cursor()
+            c.execute("INSERT INTO browsing_history (mac, domain, timestamp) VALUES (?, ?, ?)",
+                      (mac, domain, timestamp))
+            conn.commit()
+            conn.close()
+
+    def get_browsing_history(self, mac, limit=100):
+        with self.lock:
+            conn = self.get_connection()
+            conn.row_factory = sqlite3.Row
+            c = conn.cursor()
+            c.execute("SELECT domain, timestamp FROM browsing_history WHERE mac=? ORDER BY timestamp DESC LIMIT ?", (mac, limit))
+            rows = c.fetchall()
+            conn.close()
+            return [dict(r) for r in rows]

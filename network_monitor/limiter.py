@@ -4,6 +4,7 @@ import time
 from scapy.all import sniff, sendp, IP, Ether, ARP, UDP, TCP, DNS, DNSQR, DNSRR
 from collections import defaultdict
 import logging
+from network_monitor.logger import Logger
 
 class PacketLimiter:
     def __init__(self, interface, gateway_ip, gateway_mac):
@@ -26,6 +27,7 @@ class PacketLimiter:
         self.monitor_ports = {80, 443, 53, 8080, 8443} # Common web/DNS ports
         self.dns_blacklist = set() # block_list for domains
         self.captive_portal_macs = set() # MACs that should be redirected
+        self.quota_blocked_macs = set()
         self.dns_lock = threading.Lock()
         self.my_ip = self._get_my_ip_address()
         self.domain_rules = []
@@ -33,6 +35,7 @@ class PacketLimiter:
     def update_domain_rules(self, rules):
         with self.dns_lock:
             self.domain_rules = rules # List of dicts
+            Logger.info(f"Domain Rules updated. Total rules: {len(rules)}")
 
         
     def _get_my_mac(self):
@@ -56,7 +59,7 @@ class PacketLimiter:
         self.running = True
         self.thread = threading.Thread(target=self._forward_loop, daemon=True)
         self.thread.start()
-        print("[*] Packet Limiter Started (User-Space Forwarding)")
+        Logger.info("Packet Limiter Started (User-Space Forwarding)")
 
     def stop(self):
         self.running = False
@@ -77,7 +80,7 @@ class PacketLimiter:
     def set_dns_blacklist(self, domains):
         with self.dns_lock:
             self.dns_blacklist = set(domains)
-            print(f"[*] DNS Blacklist updated: {len(self.dns_blacklist)} domains")
+            Logger.info(f"DNS Blacklist updated: {len(self.dns_blacklist)} domains")
 
     def set_captive_portal(self, mac, enable=True):
         with self.dns_lock:
@@ -85,6 +88,14 @@ class PacketLimiter:
                 self.captive_portal_macs.add(mac)
             elif mac in self.captive_portal_macs:
                 self.captive_portal_macs.remove(mac)
+
+    def set_quota_block(self, mac, enable=True):
+        with self.dns_lock:
+            if enable:
+                self.quota_blocked_macs.add(mac)
+            elif mac in self.quota_blocked_macs:
+                self.quota_blocked_macs.remove(mac)
+            Logger.info(f"Quota Block {'enabled' if enable else 'disabled'} for {mac}")
 
     def update_targets(self, devices):
         with self.limits_lock:
@@ -118,7 +129,7 @@ class PacketLimiter:
             src_ip = ip_pkt.src
             dst_ip = ip_pkt.dst
             
-            print(f"[DEBUG] Packet seen: {src_ip} -> {dst_ip}") # TRACE ALL
+            Logger.debug(f"Packet seen: {src_ip} -> {dst_ip}") # TRACE ALL
             
             # Check if this packet is from a known target?
             # if src_ip in self.targets_mac:
@@ -128,21 +139,25 @@ class PacketLimiter:
             # Only check requests FROM targets (Upload)
             if packet.haslayer(UDP) and packet[UDP].dport == 53 and packet.haslayer(DNS):
                 if src_ip in self.targets_mac:
-                    print(f"[DNS SNIFF] Caught DNS Query from Target {src_ip}")
+                    Logger.debug(f"[DNS SNIFF] Caught DNS Query from Target {src_ip}")
                     if self._handle_dns_spoofing(packet, src_ip, eth):
-                        print(f"[DNS BLOCK] Spoofed response for {src_ip}")
+                        Logger.info(f"[DNS BLOCK] Spoofed response for {src_ip}")
                         return # Packet handled (spoofed response sent), stop forwarding
                     else:
-                         print(f"[DNS ALLOW] Forwarding DNS query from {src_ip}")
+                         Logger.debug(f"[DNS ALLOW] Forwarding DNS query from {src_ip}")
 
-            # CAPTIVE PORTAL ENFORCEMENT
-            # If device is captive, BLOCK all traffic unless it is for US (Web UI).
+            # CAPTIVE PORTAL & QUOTA ENFORCEMENT
+            # If device is captive OR over quota, BLOCK all traffic unless it is for US (Web UI).
             if src_ip in self.targets_mac:
                 c_mac = self.targets_mac[src_ip]
-                if c_mac in self.captive_portal_macs:
+                is_captive = c_mac in self.captive_portal_macs
+                is_over_quota = c_mac in self.quota_blocked_macs
+                
+                if is_captive or is_over_quota:
                     if dst_ip != self.my_ip and dst_ip != "255.255.255.255":
                         # Block internet access
-                        # print(f"[Captive] Dropped packet from {src_ip} -> {dst_ip}")
+                        reason = "Captive" if is_captive else "Quota"
+                        Logger.debug(f"[{reason}] Dropped packet from {src_ip} -> {dst_ip}")
                         return
             
             # SELECTIVE PORT FILTER
@@ -230,9 +245,13 @@ class PacketLimiter:
                 target_mac_addr = self.targets_mac.get(src_ip)
                 
                 with self.dns_lock:
-                    # 1. Captive Portal Check (Priority)
-                    if target_mac_addr and target_mac_addr in self.captive_portal_macs:
-                        print(f"[Captive Portal] Blocked DNS for {src_ip} ({target_mac_addr}): {check_name}")
+                    # 1. Captive Portal / Quota Check (Priority)
+                    is_captive = target_mac_addr and target_mac_addr in self.captive_portal_macs
+                    is_over_quota = target_mac_addr and target_mac_addr in self.quota_blocked_macs
+                    
+                    if is_captive or is_over_quota:
+                        reason = "Captive Portal" if is_captive else "Quota Exceeded"
+                        Logger.info(f"[{reason}] Blocked DNS for {src_ip} ({target_mac_addr}): {check_name}")
                         blocked = True
                         redirect_ip = self.my_ip
                     else:
@@ -244,7 +263,7 @@ class PacketLimiter:
                             if rule['target_mac'] == 'ALL' or rule['target_mac'] == target_mac_addr:
                                 if fnmatch.fnmatch(check_name, rule['domain_pattern']):
                                     # Match found
-                                    print(f"[Rules] Matched {check_name} against {rule['domain_pattern']}. Action: {rule['action']}")
+                                    Logger.info(f"[Rules] Matched {check_name} against {rule['domain_pattern']}. Action: {rule['action']}")
                                     if rule['action'] == 'block':
                                         blocked = True
                                         redirect_ip = self.my_ip # Redirect to our block page
@@ -286,10 +305,10 @@ class PacketLimiter:
                     
                     spoof_pkt = Ether(src=self.my_mac, dst=eth.src) / ip_resp / udp_resp / dns_resp
                     sendp(spoof_pkt, iface=self.interface, verbose=0)
-                    print(f"[Spoof] Sent fake DNS response for {check_name} -> {redirect_ip}")
+                    Logger.info(f"[Spoof] Sent fake DNS response for {check_name} -> {redirect_ip}")
                     return True
         except Exception as e:
-            print(f"[DNS Error] {e}")
+            Logger.error(f"[DNS Error] {e}")
             pass
         return False
 

@@ -4,6 +4,7 @@ import struct
 from collections import defaultdict
 from typing import Dict, Set
 from scapy.all import sniff, IP, TCP, UDP, BOOTP, DHCP
+from network_monitor.logger import Logger
 
 class BandwidthMonitor:
     def __init__(self, interface: str):
@@ -27,6 +28,10 @@ class BandwidthMonitor:
         
         # Heuristics state
         self.flow_trackers = defaultdict(lambda: {'pkts': 0, 'size': 0, 'start': 0})
+        
+        # Persistence Buffers (Staging for DB)
+        self.new_domains_buffer = defaultdict(list) # {mac: [(domain, ts), ...]}
+        self.new_apps_buffer = defaultdict(set) # {mac: {app_name, ...}}
         
         self.last_check_time = time.time()
         self.last_bytes_sent = defaultdict(int)
@@ -225,6 +230,7 @@ class BandwidthMonitor:
             if detected:
                 with self.lock:
                     self.detected_apps[ip].add(detected)
+                    self.new_apps_buffer[ip].add(detected) # Add to persistence buffer
         except:
             pass
 
@@ -307,6 +313,7 @@ class BandwidthMonitor:
                             # Simple dedup: don't add if same domain seen in last 2 seconds
                             if not history or history[-1]['domain'] != domain or (now - history[-1]['time'] > 2):
                                 history.append({'domain': domain, 'time': now})
+                                self.new_domains_buffer[ip].append((domain, now)) # Add to persistence buffer
                                 
                                 # Keep last 100
                                 if len(history) > 100:
@@ -354,3 +361,17 @@ class BandwidthMonitor:
                     "apps": list(self.detected_apps.get(ip, []))
                 }
             return results, self.last_packet_ts
+
+    def get_and_clear_history(self):
+        with self.lock:
+            # Return {mac: [(domain, ts)]}
+            data = dict(self.new_domains_buffer)
+            self.new_domains_buffer.clear()
+            return data
+
+    def get_and_clear_apps(self):
+        with self.lock:
+            # Return {mac: {app...}}
+            data = dict(self.new_apps_buffer)
+            self.new_apps_buffer.clear()
+            return data
