@@ -39,37 +39,44 @@ Through advanced ARP spoofing, traffic shaping, and deep packet inspection techn
 - **Root / Administrator Privileges** (Required for raw sockets & ARP injection)
 - **OS**: MacOS or Linux (Windows support is experimental)
 
-### Install Dependencies
-Dependencies are managed via `requirements.txt`.
+### easy Setup
+We provide an automated installer that sets up dependencies and creates a global command.
 
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+### Manual Installation
+If you prefer to install manually:
 ```bash
 pip install -r requirements.txt
 ```
 
-*Note: You may need to install `libpcap` specifics for your OS if Scapy complains (e.g., `brew install libpcap` on Mac).*
-
 ## 🚀 Usage
 
-DevilNet is controlled primarily through its Web UI.
+Once installed, you can use the global `devilnet` command from anywhere (requires root).
 
 ### 1. Start the Web Dashboard
 This launches the backend service and the web server.
 
 ```bash
-sudo python3 -m network_monitor.main --web --port 4000
+sudo devilnet --web
 ```
-Then open **`http://localhost:4000`** in your browser.
+*Port defaults to 5000. Use `--port 4000` to change it.*
+
+Then open **`http://localhost:5000`** in your browser.
 
 ### 2. Monitoring Only (CLI Mode)
 If you prefer the terminal:
 ```bash
-sudo python3 -m network_monitor.main
+sudo devilnet
 ```
 
 ### 3. Emergency Cleanup
 If the program crashes or you need to immediately restore normal network routing (stop all spoofing):
 ```bash
-sudo python3 -m network_monitor.main --cleanup
+sudo devilnet --cleanup
 ```
 
 ## 📂 Project Structure
