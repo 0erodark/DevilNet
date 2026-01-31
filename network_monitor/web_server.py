@@ -510,6 +510,11 @@ def update_quota():
     limit_bytes = limit_mb * 1024 * 1024
     if db and mac:
         db.set_quota(mac, limit_bytes)
+        # Refresh cache immediately so UI updates
+        global device_quota_cache
+        try:
+             device_quota_cache = db.get_all_quotas()
+        except: pass
         return jsonify({"status": "ok", "limit_mb": limit_mb})
     return jsonify({"error": "DB not ready or missing MAC"}), 400
 
@@ -551,25 +556,39 @@ def delete_schedule_rule(rule_id):
     return jsonify({"error": "DB not ready"}), 500
 
 def start_redirect_server(target_port):
-    """Starts a simple HTTP server on port 80 to redirect to the web UI or Blocked Page."""
+    """Starts a simple HTTP and HTTPS server to redirect traffic."""
     from http.server import HTTPServer, BaseHTTPRequestHandler
     import fnmatch
+    import ssl
+    import subprocess
+    import os
     
     class RedirectHandler(BaseHTTPRequestHandler):
         def do_GET(self):
+            self.handle_request()
+            
+        def do_POST(self):
+            self.handle_request()
+            
+        def do_HEAD(self):
+            self.handle_request()
+            
+        def do_PUT(self):
+            self.handle_request()
+            
+        def do_DELETE(self):
+            self.handle_request()
+            
+        def do_OPTIONS(self):
+            self.handle_request()
+
+        def handle_request(self):
             host_header = self.headers.get('Host', '')
             host_domain = host_header.split(':')[0] if host_header else ''
             client_ip = self.client_address[0]
             
-            # Check if this request is due to a Block or Captive Portal?
-            # DNS spoofing sends them here.
-            # If they are here, it's either:
-            # 1. Captive Portal (Lock)
-            # 2. Blocked Domain
-            # 3. Random HTTP traffic (if we are default GW, usually not seen unless we intercept port 80 strictly. 
-            #    Our limiter only redirects specific DNS to us. So if they are here, they were likely spoofed.)
-            
             is_blocked = False
+            redirect_url = None
             
             # Check Limiter state for this IP/Domain
             if limiter:
@@ -585,7 +604,6 @@ def start_redirect_server(target_port):
                          return
 
                 # 2. Domain Rule Check
-                # We need to match what the limiter matched.
                 target_mac_addr = limiter.targets_mac.get(client_ip)
                 
                 for rule in limiter.domain_rules:
@@ -596,16 +614,17 @@ def start_redirect_server(target_port):
                                 break
                             elif rule['action'] == 'redirect':
                                 # HTTP Redirect
-                                self.redirect_to(rule['redirect_target'])
-                                return
+                                redirect_url = rule['redirect_target']
+                                # Ensure protocol
+                                if not redirect_url.startswith('http'):
+                                    redirect_url = 'http://' + redirect_url
+                                break
+
+            if redirect_url:
+                self.redirect_to(redirect_url)
+                return
 
             if is_blocked:
-                 # Show Blocked Page via Redirect to main server /blocked (to serve the HTML)
-                 # We can't serve nice HTML easily from BaseHTTPRequestHandler without reading file.
-                 # Easier to redirect to Flask app.
-                 # We need our local IP. 
-                 # host_domain might be 'youtube.com', so we can't redirect to that. 
-                 # We must redirect to OUR IP.
                  my_ip = limiter.my_ip
                  self.redirect_to(f"http://{my_ip}:{target_port}/blocked")
                  return
@@ -617,14 +636,53 @@ def start_redirect_server(target_port):
             self.send_response(302)
             self.send_header('Location', url)
             self.end_headers()
+            
+        def log_message(self, format, *args):
+            # Suppress default logging to keep console clean, or use simplified logger
+            return
 
-    try:
-        # Allow binding to port 80 (requires root)
-        server = HTTPServer(('0.0.0.0', 80), RedirectHandler)
-        Logger.info("Port 80 Redirect Server Started")
-        server.serve_forever()
-    except Exception as e:
-        Logger.error(f"Could not start Redirect Server on port 80: {e}")
+    # --- HTTP (Port 80) ---
+    def run_http():
+        try:
+            server = HTTPServer(('0.0.0.0', 80), RedirectHandler)
+            Logger.info("Redirect Server (HTTP) running on port 80")
+            server.serve_forever()
+        except Exception as e:
+            Logger.error(f"Could not start HTTP Redirect Server: {e}")
+
+    # --- HTTPS (Port 443) ---
+    def run_https():
+        try:
+            # Generate temporary self-signed cert
+            cert_file = '/tmp/evil_limits_cert.pem'
+            key_file = '/tmp/evil_limits_key.pem'
+            
+            if not os.path.exists(cert_file) or not os.path.exists(key_file):
+                cmd = [
+                    "openssl", "req", "-x509", "-newkey", "rsa:2048",
+                    "-keyout", key_file, "-out", cert_file,
+                    "-days", "365", "-nodes", "-subj", "/CN=network-login"
+                ]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            server = HTTPServer(('0.0.0.0', 443), RedirectHandler)
+            
+            # Wrap socket
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=cert_file, keyfile=key_file)
+            server.socket = context.wrap_socket(server.socket, server_side=True)
+            
+            Logger.info("Redirect Server (HTTPS) running on port 443")
+            server.serve_forever()
+        except Exception as e:
+            Logger.warning(f"Could not start HTTPS Redirect Server (Port 443): {e}")
+
+    # Start threads
+    t_http = threading.Thread(target=run_http, daemon=True)
+    t_http.start()
+    
+    t_https = threading.Thread(target=run_https, daemon=True)
+    t_https.start()
 
 def start_server(iface, subnet, gw_ip, port=5000):
     init_modules(iface, subnet, gw_ip)

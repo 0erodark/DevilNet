@@ -1144,11 +1144,15 @@
         }
 
         // --- Features ---
-        function updateRefreshRate(ms) {
-            ms = parseInt(ms);
-            if (ms < 100 || isNaN(ms)) ms = 100;
-            if (updateInterval) clearInterval(updateInterval);
-            updateInterval = setInterval(update, ms);
+        // Removed conflicting updateRefreshRate (polling). We use SSE (startStream) defined above.
+
+        // Manual update trigger for immediate refresh after actions
+        async function update() {
+            try {
+                const res = await fetch('/api/data');
+                const json = await res.json();
+                handleData(json);
+            } catch (e) { console.error("Manual update failed", e); }
         }
 
         function openLimitModal(ip) {

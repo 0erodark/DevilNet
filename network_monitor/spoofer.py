@@ -205,14 +205,16 @@ class ARPSpoofer:
         sendp(packet, count=3, verbose=False, iface=self.interface)
 
     def _enable_ip_forwarding(self):
+        Logger.info("Enabling IP Forwarding...")
         if sys.platform == "darwin":
-            os.system("sysctl -w net.inet.ip.forwarding=1 > /dev/null")
+            os.system("sysctl -w net.inet.ip.forwarding=1")
         # Linux
         elif sys.platform.startswith("linux"):
             os.system("echo 1 > /proc/sys/net/ipv4/ip_forward")
 
     def _disable_ip_forwarding(self):
+        Logger.info("Disabling IP Forwarding...")
         if sys.platform == "darwin":
-            os.system("sysctl -w net.inet.ip.forwarding=0 > /dev/null")
+            os.system("sysctl -w net.inet.ip.forwarding=0")
         elif sys.platform.startswith("linux"):
             os.system("echo 0 > /proc/sys/net/ipv4/ip_forward")

@@ -15,7 +15,10 @@ def get_default_interface_info():
     gw_ip = None
     try:
         from scapy.all import conf
-        gw_ip = conf.route.route("0.0.0.0")[2]
+        # conf.route.route("0.0.0.0")[2] returns the gateway IP for the default route
+        gw_check = conf.route.route("0.0.0.0")[2]
+        if gw_check and gw_check != "0.0.0.0":
+            gw_ip = gw_check
     except:
         pass
     
